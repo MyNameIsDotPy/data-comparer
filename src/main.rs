@@ -34,7 +34,6 @@ enum Command {
         #[arg(long, default_value = "127.0.0.1:8080")]
         address: String,
     },
-    Mcp,
 }
 
 fn load_manifest(path: &PathBuf) -> Result<Manifest> {
@@ -105,7 +104,6 @@ async fn main() -> Result<()> {
             println!("Manifiesto válido");
         }
         Command::Serve { address } => data_comparer::web::serve(&address).await?,
-        Command::Mcp => data_comparer::mcp::serve().await?,
     }
     Ok(())
 }

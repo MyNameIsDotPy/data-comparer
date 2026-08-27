@@ -4,24 +4,22 @@ Herramienta local en Rust para validar que salidas SAS y Spark sean equivalentes
 
 ## Instalación
 
-Descargue el binario correspondiente desde la página de Releases:
+Descargue los dos binarios correspondientes desde la página de Releases:
 
-- Linux 64 bits: `data-comparer-linux-x86_64`
-- Linux 32 bits: `data-comparer-linux-i686`
-- Windows 64 bits: `data-comparer-windows-x86_64.exe`
-- Windows 32 bits: `data-comparer-windows-i686.exe`
+- Linux 64 bits: `data-comparer-cli-linux-x86_64` y `data-comparer-mcp-linux-x86_64`
+- Windows 64 bits: `data-comparer-cli-windows-x86_64.exe` y `data-comparer-mcp-windows-x86_64.exe`
 
 En Linux, permita su ejecución y úselo directamente:
 
 ```bash
-chmod +x data-comparer-linux-x86_64
-./data-comparer-linux-x86_64 --help
+chmod +x data-comparer-cli-linux-x86_64 data-comparer-mcp-linux-x86_64
+./data-comparer-cli-linux-x86_64 --help
 ```
 
 En Windows, ejecute el archivo descargado desde PowerShell:
 
 ```powershell
-.\data-comparer-windows-x86_64.exe --help
+.\data-comparer-cli-windows-x86_64.exe --help
 ```
 
 También se puede compilar localmente con Rust estable:
@@ -29,6 +27,7 @@ También se puede compilar localmente con Rust estable:
 ```bash
 cargo build --release
 ./target/release/data-comparer --help
+./target/release/data-comparer-mcp --help
 ```
 
 ## Uso CLI
@@ -75,8 +74,8 @@ Se aceptan fechas `DD/MM/YYYY` y `YYYY-MM-DD`. La primera hoja se utiliza para E
 
 ## MCP
 
-El subcomando `mcp` implementa JSON-RPC por entrada/salida estándar, con las herramientas `compare_files` y `compare_batch`. Configure su cliente MCP para ejecutar el binario con el argumento `mcp`.
+`data-comparer-mcp` es un ejecutable independiente que implementa JSON-RPC por entrada/salida estándar, con las herramientas `compare_files` y `compare_batch`. Configure su cliente MCP para ejecutar ese binario directamente, sin argumentos adicionales.
 
 ## Publicar una versión
 
-Al publicar una etiqueta con formato estricto `vX.Y.Z`, por ejemplo `v0.1.0`, GitHub Actions compila los binarios para Linux y Windows, en 32 y 64 bits, y crea una GitHub Release con los cuatro archivos.
+Al publicar una etiqueta con formato estricto `vX.Y.Z`, por ejemplo `v0.1.0`, GitHub Actions compila los ejecutables CLI y MCP para Linux y Windows de 64 bits y crea una GitHub Release con los cuatro archivos.

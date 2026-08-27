@@ -4,6 +4,14 @@ version = "0.1.0"
 edition = "2021"
 description = "Comparador local de salidas SAS y Spark"
 
+[[bin]]
+name = "data-comparer"
+path = "src/main.rs"
+
+[[bin]]
+name = "data-comparer-mcp"
+path = "src/bin/data-comparer-mcp.rs"
+
 [dependencies]
 anyhow = "1"
 arrow-array = "53"
