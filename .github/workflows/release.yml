@@ -1,0 +1,88 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  validate-tag:
+    runs-on: ubuntu-latest
+    outputs:
+      valid: ${{ steps.version.outputs.valid }}
+    steps:
+      - id: version
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          if [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "valid=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "valid=false" >> "$GITHUB_OUTPUT"
+            echo "Las etiquetas de release deben tener el formato vX.Y.Z" >&2
+            exit 1
+          fi
+
+  build:
+    needs: validate-tag
+    if: needs.validate-tag.outputs.valid == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            asset_suffix: linux-x86_64
+          - os: ubuntu-latest
+            target: i686-unknown-linux-gnu
+            asset_suffix: linux-i686
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            asset_suffix: windows-x86_64.exe
+          - os: windows-latest
+            target: i686-pc-windows-msvc
+            asset_suffix: windows-i686.exe
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - name: Install Linux 32-bit linker
+        if: matrix.target == 'i686-unknown-linux-gnu'
+        run: sudo apt-get update && sudo apt-get install --yes gcc-multilib
+      - name: Build release binary
+        run: cargo build --locked --release --target ${{ matrix.target }}
+      - name: Stage release asset
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+          SUFFIX: ${{ matrix.asset_suffix }}
+        run: |
+          binary="target/$TARGET/release/data-comparer"
+          if [[ "$TARGET" == *windows* ]]; then binary+=".exe"; fi
+          cp "$binary" "data-comparer-$SUFFIX"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: data-comparer-${{ matrix.asset_suffix }}
+          path: data-comparer-${{ matrix.asset_suffix }}
+          if-no-files-found: error
+
+  release:
+    needs: [validate-tag, build]
+    if: needs.validate-tag.outputs.valid == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: data-comparer-*
+          path: release-assets
+          merge-multiple: true
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: release-assets/*

@@ -1,0 +1,26 @@
+[package]
+name = "data-comparer"
+version = "0.1.0"
+edition = "2021"
+description = "Comparador local de salidas SAS y Spark"
+
+[dependencies]
+anyhow = "1"
+arrow-array = "53"
+arrow-cast = "53"
+axum = { version = "0.7", features = ["multipart"] }
+calamine = "0.26"
+chrono = { version = "0.4", features = ["serde"] }
+clap = { version = "4", features = ["derive"] }
+csv = "1"
+parquet = { version = "53", features = ["arrow"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+sha2 = "0.10"
+tokio = { version = "1", features = ["full"] }
+tower-http = { version = "0.6", features = ["fs"] }
+uuid = { version = "1", features = ["v4"] }
+
+[dev-dependencies]
+tempfile = "3"
