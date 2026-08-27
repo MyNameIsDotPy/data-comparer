@@ -1,5 +1,6 @@
 use data_comparer::compare::compare_all;
-use data_comparer::config::{Defaults, PairConfig};
+use data_comparer::config::{ColumnRule, Defaults, PairConfig};
+use data_comparer::report::render_html;
 use std::fs;
 
 fn pair(left: &std::path::Path, right: &std::path::Path) -> PairConfig {
@@ -11,6 +12,7 @@ fn pair(left: &std::path::Path, right: &std::path::Path) -> PairConfig {
         compare_column_order: None,
         date_format: None,
         columns: Default::default(),
+        key_columns: vec![],
     }
 }
 
@@ -43,4 +45,69 @@ fn detects_column_order_difference() {
     let result = compare_all(&[pair(&left, &right)], &Defaults::default());
     assert!(!result.passed);
     assert!(!result.pairs[0].schema.column_order_equal);
+}
+
+#[test]
+fn matches_column_names_with_casing_difference() {
+    let temp = tempfile::tempdir().unwrap();
+    let left = temp.path().join("sas.csv");
+    let right = temp.path().join("adp.csv");
+    fs::write(&left, "poliza,importe\nA-1,10\n").unwrap();
+    fs::write(&right, "POLIZA,IMPORTE\nA-1,10\n").unwrap();
+    let result = compare_all(&[pair(&left, &right)], &Defaults::default());
+    assert!(result.passed, "{result:#?}");
+    assert_eq!(result.pairs[0].schema.name_differences.len(), 2);
+    assert!(result.pairs[0].schema.missing_in_adp.is_empty());
+}
+
+#[test]
+fn reports_rows_and_keys_only_on_each_side() {
+    let temp = tempfile::tempdir().unwrap();
+    let left = temp.path().join("sas.csv");
+    let right = temp.path().join("adp.csv");
+    fs::write(&left, "poliza,importe\nA,10\nB,20\n").unwrap();
+    fs::write(&right, "poliza,importe\nA,10\nC,30\n").unwrap();
+    let mut config = pair(&left, &right);
+    config.key_columns = vec!["poliza".to_string()];
+    let result = compare_all(&[config], &Defaults::default());
+    let pair = &result.pairs[0];
+    assert_eq!(pair.rows_only_in_sas, 1);
+    assert_eq!(pair.rows_only_in_adp, 1);
+    let keys = pair.key_result.as_ref().unwrap();
+    assert_eq!(keys.keys_only_in_sas, 1);
+    assert_eq!(keys.keys_only_in_adp, 1);
+}
+
+#[test]
+fn applies_quality_rules_and_renders_foldable_sections() {
+    let temp = tempfile::tempdir().unwrap();
+    let left = temp.path().join("sas.csv");
+    let right = temp.path().join("adp.csv");
+    fs::write(&left, "poliza,importe\nA,150\nA,10\n").unwrap();
+    fs::write(&right, "poliza,importe\nA,150\nA,10\n").unwrap();
+    let mut config = pair(&left, &right);
+    config.columns.insert(
+        "poliza".to_string(),
+        ColumnRule {
+            unique: Some(true),
+            nullable: Some(false),
+            ..Default::default()
+        },
+    );
+    config.columns.insert(
+        "importe".to_string(),
+        ColumnRule {
+            max: Some(100.0),
+            ..Default::default()
+        },
+    );
+    let run = compare_all(&[config], &Defaults::default());
+    assert!(!run.passed);
+    let amount = run.pairs[0]
+        .column_results
+        .iter()
+        .find(|column| column.name == "importe")
+        .unwrap();
+    assert_eq!(amount.sas_out_of_range, 1);
+    assert!(render_html(&run).contains("<details"));
 }

@@ -23,6 +23,8 @@ enum Command {
         row_order: bool,
         #[arg(long, default_value_t = 0.1)]
         tolerance: f64,
+        #[arg(long = "key", value_delimiter = ',')]
+        key_columns: Vec<String>,
     },
     Batch {
         manifest: PathBuf,
@@ -52,6 +54,7 @@ async fn main() -> Result<()> {
             spark,
             row_order,
             tolerance,
+            key_columns,
         } => {
             let defaults = Defaults {
                 compare_row_order: row_order,
@@ -68,6 +71,7 @@ async fn main() -> Result<()> {
                     compare_column_order: None,
                     date_format: None,
                     columns: Default::default(),
+                    key_columns,
                 }],
             };
             let run = compare_all(&manifest.pairs, &defaults);

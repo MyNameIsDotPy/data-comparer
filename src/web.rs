@@ -101,6 +101,7 @@ async fn compare(mut multipart: Multipart) -> Result<Json<Value>, (StatusCode, S
                 compare_column_order: None,
                 date_format: None,
                 columns: Default::default(),
+                key_columns: vec![],
             }),
             _ => Err((
                 StatusCode::BAD_REQUEST,
@@ -120,6 +121,7 @@ async fn compare(mut multipart: Multipart) -> Result<Json<Value>, (StatusCode, S
             compare_row_order: row_order,
             compare_column_order: column_order,
             date_format,
+            ..Defaults::default()
         },
         pairs,
     };

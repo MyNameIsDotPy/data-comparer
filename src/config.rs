@@ -11,6 +11,9 @@ fn default_date_format() -> String {
 fn default_column_order() -> bool {
     true
 }
+fn default_trim_values() -> bool {
+    true
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Defaults {
@@ -22,6 +25,10 @@ pub struct Defaults {
     pub compare_column_order: bool,
     #[serde(default = "default_date_format")]
     pub date_format: String,
+    #[serde(default = "default_trim_values")]
+    pub trim_values: bool,
+    #[serde(default)]
+    pub case_insensitive_values: bool,
 }
 
 impl Default for Defaults {
@@ -31,6 +38,8 @@ impl Default for Defaults {
             compare_row_order: false,
             compare_column_order: true,
             date_format: default_date_format(),
+            trim_values: default_trim_values(),
+            case_insensitive_values: false,
         }
     }
 }
@@ -39,6 +48,12 @@ impl Default for Defaults {
 pub struct ColumnRule {
     pub numeric_tolerance: Option<f64>,
     pub date_format: Option<String>,
+    pub min: Option<f64>,
+    pub max: Option<f64>,
+    pub unique: Option<bool>,
+    pub nullable: Option<bool>,
+    pub trim_values: Option<bool>,
+    pub case_insensitive_values: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -57,6 +72,8 @@ pub struct PairConfig {
     pub date_format: Option<String>,
     #[serde(default)]
     pub columns: BTreeMap<String, ColumnRule>,
+    #[serde(default)]
+    pub key_columns: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -91,5 +108,17 @@ impl PairConfig {
             .get(column)
             .and_then(|r| r.numeric_tolerance)
             .unwrap_or(defaults.numeric_tolerance)
+    }
+    pub fn trim_values(&self, defaults: &Defaults, column: &str) -> bool {
+        self.columns
+            .get(column)
+            .and_then(|r| r.trim_values)
+            .unwrap_or(defaults.trim_values)
+    }
+    pub fn case_insensitive_values(&self, defaults: &Defaults, column: &str) -> bool {
+        self.columns
+            .get(column)
+            .and_then(|r| r.case_insensitive_values)
+            .unwrap_or(defaults.case_insensitive_values)
     }
 }

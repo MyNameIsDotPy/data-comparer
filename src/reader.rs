@@ -8,6 +8,8 @@ use std::path::Path;
 pub struct Table {
     pub columns: Vec<String>,
     pub rows: Vec<Vec<String>>,
+    pub format: String,
+    pub details: Vec<String>,
 }
 
 pub fn read_table(path: &Path) -> Result<Table> {
@@ -37,12 +39,22 @@ fn read_csv(path: &Path) -> Result<Table> {
     for record in reader.records() {
         rows.push(record?.iter().map(str::to_owned).collect());
     }
-    Ok(Table { columns, rows })
+    Ok(Table {
+        columns,
+        rows,
+        format: "CSV".to_string(),
+        details: vec![
+            "Delimitador: ,".to_string(),
+            "Codificación: UTF-8".to_string(),
+        ],
+    })
 }
 
 fn read_excel(path: &Path) -> Result<Table> {
     let mut workbook = open_workbook_auto(path)
         .with_context(|| format!("No se pudo abrir Excel {}", path.display()))?;
+    let sheets = workbook.sheet_names().to_vec();
+    let sheet_name = sheets.first().cloned().unwrap_or_default();
     let range = workbook
         .worksheet_range_at(0)
         .ok_or_else(|| anyhow!("El Excel no contiene hojas"))??;
@@ -58,6 +70,11 @@ fn read_excel(path: &Path) -> Result<Table> {
         rows: rows
             .map(|row| row.iter().map(|cell| cell.to_string()).collect())
             .collect(),
+        format: "Excel".to_string(),
+        details: vec![
+            format!("Hoja utilizada: {sheet_name}"),
+            format!("Número de hojas: {}", sheets.len()),
+        ],
     })
 }
 
@@ -65,6 +82,12 @@ fn read_parquet(path: &Path) -> Result<Table> {
     let file = std::fs::File::open(path)
         .with_context(|| format!("No se pudo abrir Parquet {}", path.display()))?;
     let builder = ParquetRecordBatchReaderBuilder::try_new(file)?;
+    let schema_details = builder
+        .schema()
+        .fields()
+        .iter()
+        .map(|field| format!("{}: {}", field.name(), field.data_type()))
+        .collect::<Vec<_>>();
     let columns = builder
         .schema()
         .fields()
@@ -87,5 +110,10 @@ fn read_parquet(path: &Path) -> Result<Table> {
             rows.push(row);
         }
     }
-    Ok(Table { columns, rows })
+    Ok(Table {
+        columns,
+        rows,
+        format: "Parquet".to_string(),
+        details: schema_details,
+    })
 }

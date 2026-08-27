@@ -35,6 +35,7 @@ cargo build --release
 ```bash
 data-comparer compare salida_sas.csv salida_spark.parquet
 data-comparer compare salida_sas.xlsx salida_spark.parquet --row-order --tolerance 0.01
+data-comparer compare salida_sas.csv salida_adp.csv --key poliza,fecha
 data-comparer batch comparaciones.yaml
 data-comparer validate comparaciones.yaml
 ```
@@ -46,6 +47,7 @@ Opciones de `compare`:
 ```text
 --row-order              Exige el mismo orden de filas.
 --tolerance <NUMERO>     Tolerancia numérica absoluta; el valor predeterminado es 0.1.
+--key <COLUMNAS>         Columnas de clave, separadas por coma, para comparar entidades.
 ```
 
 Use `data-comparer <comando> --help` para consultar todas las opciones.
@@ -68,9 +70,20 @@ pairs:
         date_format: "%Y-%m-%d"
       importe:
         numeric_tolerance: 0.01
+        min: 0
+        unique: false
+      poliza:
+        unique: true
+        nullable: false
+    key_columns:
+      - poliza
 ```
 
 Se aceptan fechas `DD/MM/YYYY` y `YYYY-MM-DD`. La primera hoja se utiliza para Excel. Cuando no se compara el orden de filas, se mantienen los conteos de filas duplicadas.
+
+Los nombres de columnas se emparejan sin distinguir mayúsculas/minúsculas y espacios exteriores. Una diferencia como `poliza` frente a `POLIZA` aparece como advertencia de schema, pero no impide comparar los datos. Las reglas opcionales por columna son `numeric_tolerance`, `date_format`, `min`, `max`, `unique`, `nullable`, `trim_values` y `case_insensitive_values`.
+
+`key_columns` habilita la comparación por clave de negocio: informa claves duplicadas, claves exclusivas de SAS o ADP y claves que existen en ambos archivos pero contienen valores diferentes.
 
 ## MCP
 
@@ -78,4 +91,4 @@ Se aceptan fechas `DD/MM/YYYY` y `YYYY-MM-DD`. La primera hoja se utiliza para E
 
 ## Publicar una versión
 
-Al publicar una etiqueta con formato estricto `vX.Y.Z`, por ejemplo `v0.1.0`, GitHub Actions compila los ejecutables CLI y MCP para Linux y Windows de 64 bits y crea una GitHub Release con los cuatro archivos.
+Al publicar una etiqueta con formato estricto `vX.Y.Z`, por ejemplo `v0.2.0`, GitHub Actions compila los ejecutables CLI y MCP para Linux y Windows de 64 bits y crea una GitHub Release con los cuatro archivos.

@@ -41,7 +41,7 @@ pub async fn serve() -> Result<()> {
 }
 
 fn tool(name: &str, description: &str) -> Value {
-    json!({"name":name,"description":description,"inputSchema":{"type":"object","properties":{"sas":{"type":"string"},"spark":{"type":"string"},"manifest":{"type":"string"},"row_order":{"type":"boolean"},"tolerance":{"type":"number"}},"additionalProperties":false}})
+    json!({"name":name,"description":description,"inputSchema":{"type":"object","properties":{"sas":{"type":"string"},"spark":{"type":"string"},"manifest":{"type":"string"},"row_order":{"type":"boolean"},"tolerance":{"type":"number"},"key_columns":{"type":"array","items":{"type":"string"}},"trim_values":{"type":"boolean"},"case_insensitive_values":{"type":"boolean"}},"additionalProperties":false}})
 }
 fn call(params: &Value) -> Value {
     let result = (|| -> Result<Value> {
@@ -58,6 +58,14 @@ fn call(params: &Value) -> Value {
                         .and_then(Value::as_bool)
                         .unwrap_or(false),
                     numeric_tolerance: args.get("tolerance").and_then(Value::as_f64).unwrap_or(0.1),
+                    trim_values: args
+                        .get("trim_values")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(true),
+                    case_insensitive_values: args
+                        .get("case_insensitive_values")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false),
                     ..Defaults::default()
                 },
                 pairs: vec![PairConfig {
@@ -76,6 +84,16 @@ fn call(params: &Value) -> Value {
                     compare_column_order: None,
                     date_format: None,
                     columns: Default::default(),
+                    key_columns: args
+                        .get("key_columns")
+                        .and_then(Value::as_array)
+                        .map(|keys| {
+                            keys.iter()
+                                .filter_map(Value::as_str)
+                                .map(str::to_owned)
+                                .collect()
+                        })
+                        .unwrap_or_default(),
                 }],
             },
             "compare_batch" => serde_yaml::from_str(&std::fs::read_to_string(
