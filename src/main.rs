@@ -25,6 +25,8 @@ enum Command {
         tolerance: f64,
         #[arg(long = "key", value_delimiter = ',')]
         key_columns: Vec<String>,
+        #[arg(long, default_value_t = ',')]
+        delimiter: char,
     },
     Batch {
         manifest: PathBuf,
@@ -55,10 +57,12 @@ async fn main() -> Result<()> {
             row_order,
             tolerance,
             key_columns,
+            delimiter,
         } => {
             let defaults = Defaults {
                 compare_row_order: row_order,
                 numeric_tolerance: tolerance,
+                delimiter,
                 ..Defaults::default()
             };
             let manifest = Manifest {
@@ -72,6 +76,7 @@ async fn main() -> Result<()> {
                     date_format: None,
                     columns: Default::default(),
                     key_columns,
+                    delimiter: None,
                 }],
             };
             let run = compare_all(&manifest.pairs, &defaults);

@@ -12,14 +12,14 @@ pub struct Table {
     pub details: Vec<String>,
 }
 
-pub fn read_table(path: &Path) -> Result<Table> {
+pub fn read_table(path: &Path, delimiter: u8) -> Result<Table> {
     let extension = path
         .extension()
         .and_then(|s| s.to_str())
         .unwrap_or("")
         .to_ascii_lowercase();
     match extension.as_str() {
-        "csv" => read_csv(path),
+        "csv" => read_csv(path, delimiter),
         "xlsx" | "xlsm" | "xls" => read_excel(path),
         "parquet" => read_parquet(path),
         _ => Err(anyhow!(
@@ -29,9 +29,10 @@ pub fn read_table(path: &Path) -> Result<Table> {
     }
 }
 
-fn read_csv(path: &Path) -> Result<Table> {
+fn read_csv(path: &Path, delimiter: u8) -> Result<Table> {
     let mut reader = csv::ReaderBuilder::new()
         .flexible(true)
+        .delimiter(delimiter)
         .from_path(path)
         .with_context(|| format!("No se pudo abrir CSV {}", path.display()))?;
     let columns = reader.headers()?.iter().map(str::to_owned).collect();
@@ -44,7 +45,7 @@ fn read_csv(path: &Path) -> Result<Table> {
         rows,
         format: "CSV".to_string(),
         details: vec![
-            "Delimitador: ,".to_string(),
+            format!("Delimitador: {}", delimiter as char),
             "Codificación: UTF-8".to_string(),
         ],
     })

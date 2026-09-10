@@ -13,6 +13,7 @@ fn pair(left: &std::path::Path, right: &std::path::Path) -> PairConfig {
         date_format: None,
         columns: Default::default(),
         key_columns: vec![],
+        delimiter: None,
     }
 }
 

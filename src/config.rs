@@ -14,6 +14,9 @@ fn default_column_order() -> bool {
 fn default_trim_values() -> bool {
     true
 }
+fn default_delimiter() -> char {
+    ','
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Defaults {
@@ -29,6 +32,8 @@ pub struct Defaults {
     pub trim_values: bool,
     #[serde(default)]
     pub case_insensitive_values: bool,
+    #[serde(default = "default_delimiter")]
+    pub delimiter: char,
 }
 
 impl Default for Defaults {
@@ -40,6 +45,7 @@ impl Default for Defaults {
             date_format: default_date_format(),
             trim_values: default_trim_values(),
             case_insensitive_values: false,
+            delimiter: default_delimiter(),
         }
     }
 }
@@ -74,6 +80,8 @@ pub struct PairConfig {
     pub columns: BTreeMap<String, ColumnRule>,
     #[serde(default)]
     pub key_columns: Vec<String>,
+    #[serde(default)]
+    pub delimiter: Option<char>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -120,5 +128,8 @@ impl PairConfig {
             .get(column)
             .and_then(|r| r.case_insensitive_values)
             .unwrap_or(defaults.case_insensitive_values)
+    }
+    pub fn delimiter(&self, defaults: &Defaults) -> char {
+        self.delimiter.unwrap_or(defaults.delimiter)
     }
 }

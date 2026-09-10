@@ -94,6 +94,7 @@ fn call(params: &Value) -> Value {
                                 .collect()
                         })
                         .unwrap_or_default(),
+                    delimiter: None,
                 }],
             },
             "compare_batch" => serde_yaml::from_str(&std::fs::read_to_string(

@@ -102,6 +102,7 @@ async fn compare(mut multipart: Multipart) -> Result<Json<Value>, (StatusCode, S
                 date_format: None,
                 columns: Default::default(),
                 key_columns: vec![],
+                delimiter: None,
             }),
             _ => Err((
                 StatusCode::BAD_REQUEST,

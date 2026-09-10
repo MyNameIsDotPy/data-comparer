@@ -48,6 +48,7 @@ Opciones de `compare`:
 --row-order              Exige el mismo orden de filas.
 --tolerance <NUMERO>     Tolerancia numérica absoluta; el valor predeterminado es 0.1.
 --key <COLUMNAS>         Columnas de clave, separadas por coma, para comparar entidades.
+--delimiter <CARACTER>   Delimitador de los archivos CSV; el valor predeterminado es ",".
 ```
 
 Use `data-comparer <comando> --help` para consultar todas las opciones.
@@ -60,6 +61,7 @@ defaults:
   compare_row_order: false
   compare_column_order: true
   date_format: "%d/%m/%Y"
+  delimiter: ","
 
 pairs:
   - name: ventas
@@ -84,6 +86,8 @@ Se aceptan fechas `DD/MM/YYYY` y `YYYY-MM-DD`. La primera hoja se utiliza para E
 Los nombres de columnas se emparejan sin distinguir mayúsculas/minúsculas y espacios exteriores. Una diferencia como `poliza` frente a `POLIZA` aparece como advertencia de schema, pero no impide comparar los datos. Las reglas opcionales por columna son `numeric_tolerance`, `date_format`, `min`, `max`, `unique`, `nullable`, `trim_values` y `case_insensitive_values`.
 
 `key_columns` habilita la comparación por clave de negocio: informa claves duplicadas, claves exclusivas de SAS o ADP y claves que existen en ambos archivos pero contienen valores diferentes.
+
+`delimiter` (global o por par, un solo carácter) define el separador usado al leer archivos CSV; no afecta a Excel ni Parquet.
 
 ## MCP
 
