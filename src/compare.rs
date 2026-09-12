@@ -1,10 +1,9 @@
 use crate::config::{ColumnRule, Defaults, PairConfig};
-use crate::reader::{read_table, Table};
+use crate::row_stream::{open_row_stream, RowStream};
 use anyhow::Result;
 use chrono::NaiveDate;
 use serde::Serialize;
-use sha2::{Digest, Sha256};
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashSet};
 use std::path::Path;
 
 const SAMPLE_LIMIT: usize = 50;
@@ -126,7 +125,7 @@ struct ColumnMatch {
     adp_name: String,
 }
 
-fn info(path: &Path, table: &Table) -> FileInfo {
+fn file_info(path: &Path, columns: usize, rows: usize) -> FileInfo {
     FileInfo {
         path: path.display().to_string(),
         file_name: path
@@ -134,8 +133,8 @@ fn info(path: &Path, table: &Table) -> FileInfo {
             .and_then(|x| x.to_str())
             .unwrap_or_default()
             .to_string(),
-        rows: table.rows.len(),
-        columns: table.columns.len(),
+        rows,
+        columns,
     }
 }
 fn is_null(value: &str) -> bool {
@@ -180,30 +179,13 @@ fn normalized(value: &str, date_format: &str, trim: bool, case_insensitive: bool
         value.to_string()
     }
 }
-fn infer_type(values: &[String], format: &str) -> String {
-    let values = values.iter().filter(|v| !is_null(v)).collect::<Vec<_>>();
-    if values.is_empty() {
-        return "empty".to_string();
-    }
-    if values.iter().all(|v| number(v).is_some()) {
-        return "number".to_string();
-    }
-    if values.iter().all(|v| date(v, format).is_some()) {
-        return "date".to_string();
-    }
-    if values.iter().all(|v| {
-        matches!(
-            v.trim().to_ascii_lowercase().as_str(),
-            "true" | "false" | "0" | "1"
-        )
-    }) {
-        return "boolean".to_string();
-    }
-    "text".to_string()
-}
-fn match_columns(left: &Table, right: &Table) -> (Vec<ColumnMatch>, SchemaResult) {
-    let mut right_by_name: HashMap<String, Vec<usize>> = HashMap::new();
-    for (index, name) in right.columns.iter().enumerate() {
+fn match_columns(
+    left_columns: &[String],
+    right_columns: &[String],
+) -> (Vec<ColumnMatch>, SchemaResult) {
+    let mut right_by_name: std::collections::HashMap<String, Vec<usize>> =
+        std::collections::HashMap::new();
+    for (index, name) in right_columns.iter().enumerate() {
         right_by_name
             .entry(normalized_name(name))
             .or_default()
@@ -214,13 +196,13 @@ fn match_columns(left: &Table, right: &Table) -> (Vec<ColumnMatch>, SchemaResult
     let mut missing_in_adp = Vec::new();
     let mut name_differences = Vec::new();
     let mut ambiguous = Vec::new();
-    for (sas_index, sas_name) in left.columns.iter().enumerate() {
+    for (sas_index, sas_name) in left_columns.iter().enumerate() {
         let key = normalized_name(sas_name);
         match right_by_name.get(&key) {
             Some(indices) if indices.len() == 1 && !matched_right.contains(&indices[0]) => {
                 let adp_index = indices[0];
                 matched_right.insert(adp_index);
-                let adp_name = right.columns[adp_index].clone();
+                let adp_name = right_columns[adp_index].clone();
                 if sas_name != &adp_name {
                     name_differences.push(NameDifference {
                         sas: sas_name.clone(),
@@ -243,20 +225,17 @@ fn match_columns(left: &Table, right: &Table) -> (Vec<ColumnMatch>, SchemaResult
             None => missing_in_adp.push(sas_name.clone()),
         }
     }
-    let missing_in_sas = right
-        .columns
+    let missing_in_sas = right_columns
         .iter()
         .enumerate()
         .filter(|(i, _)| !matched_right.contains(i))
         .map(|(_, name)| name.clone())
         .collect::<Vec<_>>();
-    let normalized_left = left
-        .columns
+    let normalized_left = left_columns
         .iter()
         .map(|v| normalized_name(v))
         .collect::<Vec<_>>();
-    let normalized_right = right
-        .columns
+    let normalized_right = right_columns
         .iter()
         .map(|v| normalized_name(v))
         .collect::<Vec<_>>();
@@ -317,7 +296,7 @@ fn fingerprint(
     pair: &PairConfig,
     defaults: &Defaults,
 ) -> String {
-    let mut hasher = Sha256::new();
+    let mut hasher = blake3::Hasher::new();
     for column in columns {
         let index = if side_sas {
             column.sas_index
@@ -338,9 +317,9 @@ fn fingerprint(
             ),
         };
         hasher.update(value.as_bytes());
-        hasher.update([0x1f]);
+        hasher.update(&[0x1f]);
     }
-    format!("{:x}", hasher.finalize())
+    hasher.finalize().to_hex().to_string()
 }
 fn row_text(row: &[String], columns: &[ColumnMatch], side_sas: bool) -> String {
     columns
@@ -357,158 +336,206 @@ fn row_text(row: &[String], columns: &[ColumnMatch], side_sas: bool) -> String {
         .collect::<Vec<_>>()
         .join(" | ")
 }
-fn row_counts(
-    table: &Table,
-    columns: &[ColumnMatch],
-    side_sas: bool,
-    pair: &PairConfig,
-    defaults: &Defaults,
-) -> BTreeMap<String, (usize, String)> {
-    let mut result = BTreeMap::new();
-    for row in &table.rows {
-        let key = fingerprint(row, columns, side_sas, pair, defaults);
-        let entry = result
-            .entry(key)
-            .or_insert((0, row_text(row, columns, side_sas)));
-        entry.0 += 1;
+
+/// Acumula, en una sola pasada por celda, todo lo que antes requería varios
+/// escaneos completos de la columna materializada (nulos, distintos, stats
+/// numéricas, longitudes de texto, inferencia de tipo, rango y unicidad).
+struct ColumnAccumulator {
+    date_format: String,
+    trim: bool,
+    case_insensitive: bool,
+    tolerance: f64,
+    range_min: Option<f64>,
+    range_max: Option<f64>,
+    unique_required: Option<bool>,
+    nullable_allowed: Option<bool>,
+
+    any_non_null: bool,
+    nulls: usize,
+    distinct: HashSet<String>,
+    all_numeric: bool,
+    all_date: bool,
+    all_boolean: bool,
+    sum: f64,
+    count_numeric: usize,
+    min: Option<f64>,
+    max: Option<f64>,
+    text_min_len: Option<usize>,
+    text_max_len: Option<usize>,
+    out_of_range: usize,
+    unique_seen: Option<HashSet<String>>,
+    unique_total: usize,
+}
+
+impl ColumnAccumulator {
+    fn new(pair: &PairConfig, defaults: &Defaults, name: &str) -> Self {
+        let column_rule = rule(pair, name);
+        Self {
+            date_format: pair.date_format(defaults, name).to_string(),
+            trim: pair.trim_values(defaults, name),
+            case_insensitive: pair.case_insensitive_values(defaults, name),
+            tolerance: pair.tolerance(defaults, name),
+            range_min: column_rule.and_then(|r| r.min),
+            range_max: column_rule.and_then(|r| r.max),
+            unique_required: column_rule.and_then(|r| r.unique),
+            nullable_allowed: column_rule.and_then(|r| r.nullable),
+            any_non_null: false,
+            nulls: 0,
+            distinct: HashSet::new(),
+            all_numeric: true,
+            all_date: true,
+            all_boolean: true,
+            sum: 0.0,
+            count_numeric: 0,
+            min: None,
+            max: None,
+            text_min_len: None,
+            text_max_len: None,
+            out_of_range: 0,
+            unique_seen: column_rule.and_then(|r| r.unique).map(|_| HashSet::new()),
+            unique_total: 0,
+        }
     }
-    result
-}
-fn numeric_stats(values: &[String]) -> (Option<f64>, Option<f64>, Option<f64>, Option<f64>) {
-    let values = values.iter().filter_map(|v| number(v)).collect::<Vec<_>>();
-    if values.is_empty() {
-        return (None, None, None, None);
+
+    fn push(&mut self, value: &str) {
+        self.distinct.insert(normalized(
+            value,
+            &self.date_format,
+            self.trim,
+            self.case_insensitive,
+        ));
+        if is_null(value) {
+            self.nulls += 1;
+            return;
+        }
+        self.any_non_null = true;
+        let num = number(value);
+        if num.is_none() {
+            self.all_numeric = false;
+        }
+        if self.all_date && date(value, &self.date_format).is_none() {
+            self.all_date = false;
+        }
+        if self.all_boolean
+            && !matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "true" | "false" | "0" | "1"
+            )
+        {
+            self.all_boolean = false;
+        }
+        if let Some(n) = num {
+            self.sum += n;
+            self.count_numeric += 1;
+            self.min = Some(self.min.map_or(n, |m| m.min(n)));
+            self.max = Some(self.max.map_or(n, |m| m.max(n)));
+            let violates = self.range_min.is_some_and(|min| n < min)
+                || self.range_max.is_some_and(|max| n > max);
+            if violates {
+                self.out_of_range += 1;
+            }
+        }
+        let text_len = value.chars().count();
+        self.text_min_len = Some(self.text_min_len.map_or(text_len, |m| m.min(text_len)));
+        self.text_max_len = Some(self.text_max_len.map_or(text_len, |m| m.max(text_len)));
+        if let Some(seen) = &mut self.unique_seen {
+            self.unique_total += 1;
+            seen.insert(value.to_string());
+        }
     }
-    let sum = values.iter().sum::<f64>();
-    (
-        Some(sum),
-        values.iter().copied().reduce(f64::min),
-        values.iter().copied().reduce(f64::max),
-        Some(sum / values.len() as f64),
-    )
-}
-fn text_lengths(values: &[String]) -> (Option<usize>, Option<usize>) {
-    let lengths = values
-        .iter()
-        .filter(|v| !is_null(v))
-        .map(|v| v.chars().count())
-        .collect::<Vec<_>>();
-    (lengths.iter().copied().min(), lengths.iter().copied().max())
-}
-fn column_result(
-    column: &ColumnMatch,
-    left: &[String],
-    right: &[String],
-    pair: &PairConfig,
-    defaults: &Defaults,
-) -> ColumnResult {
-    let name = &column.sas_name;
-    let tolerance = pair.tolerance(defaults, name);
-    let (sas_sum, sas_min, sas_max, sas_mean) = numeric_stats(left);
-    let (adp_sum, adp_min, adp_max, adp_mean) = numeric_stats(right);
-    let column_rule = rule(pair, name);
-    let range = |values: &[String]| {
-        values
-            .iter()
-            .filter_map(|v| number(v))
-            .filter(|value| {
-                column_rule
-                    .and_then(|r| r.min)
-                    .is_some_and(|min| *value < min)
-                    || column_rule
-                        .and_then(|r| r.max)
-                        .is_some_and(|max| *value > max)
-            })
-            .count()
-    };
-    let valid_unique = |values: &[String]| {
-        column_rule.and_then(|r| r.unique).map(|required| {
+
+    fn infer_type(&self) -> String {
+        if !self.any_non_null {
+            return "empty".to_string();
+        }
+        if self.all_numeric {
+            "number".to_string()
+        } else if self.all_date {
+            "date".to_string()
+        } else if self.all_boolean {
+            "boolean".to_string()
+        } else {
+            "text".to_string()
+        }
+    }
+
+    fn unique_ok(&self) -> Option<bool> {
+        self.unique_required.map(|required| {
             !required
-                || values
-                    .iter()
-                    .filter(|v| !is_null(v))
-                    .collect::<HashSet<_>>()
-                    .len()
-                    == values.iter().filter(|v| !is_null(v)).count()
+                || self
+                    .unique_seen
+                    .as_ref()
+                    .is_some_and(|seen| seen.len() == self.unique_total)
         })
-    };
-    let valid_nullable = |values: &[String]| {
-        column_rule
-            .and_then(|r| r.nullable)
-            .map(|allowed| allowed || values.iter().all(|v| !is_null(v)))
-    };
+    }
+
+    fn nullable_ok(&self) -> Option<bool> {
+        self.nullable_allowed
+            .map(|allowed| allowed || self.nulls == 0)
+    }
+}
+
+fn finish_column(
+    column: &ColumnMatch,
+    left: ColumnAccumulator,
+    right: ColumnAccumulator,
+    left_rows: usize,
+    right_rows: usize,
+) -> ColumnResult {
+    let sas_type = left.infer_type();
+    let adp_type = right.infer_type();
+    let types_equal = sas_type == adp_type;
+    let sas_sum = (left.count_numeric > 0).then_some(left.sum);
+    let adp_sum = (right.count_numeric > 0).then_some(right.sum);
+    let sas_mean = (left.count_numeric > 0).then(|| left.sum / left.count_numeric as f64);
+    let adp_mean = (right.count_numeric > 0).then(|| right.sum / right.count_numeric as f64);
+    let tolerance = left.tolerance;
     ColumnResult {
-        name: name.clone(),
+        name: column.sas_name.clone(),
         adp_name: column.adp_name.clone(),
-        sas_type: infer_type(left, pair.date_format(defaults, name)),
-        adp_type: infer_type(right, pair.date_format(defaults, name)),
-        types_equal: infer_type(left, pair.date_format(defaults, name))
-            == infer_type(right, pair.date_format(defaults, name)),
-        sas_nulls: left.iter().filter(|v| is_null(v)).count(),
-        adp_nulls: right.iter().filter(|v| is_null(v)).count(),
-        sas_distinct: left
-            .iter()
-            .map(|v| {
-                normalized(
-                    v,
-                    pair.date_format(defaults, name),
-                    pair.trim_values(defaults, name),
-                    pair.case_insensitive_values(defaults, name),
-                )
-            })
-            .collect::<HashSet<_>>()
-            .len(),
-        adp_distinct: right
-            .iter()
-            .map(|v| {
-                normalized(
-                    v,
-                    pair.date_format(defaults, name),
-                    pair.trim_values(defaults, name),
-                    pair.case_insensitive_values(defaults, name),
-                )
-            })
-            .collect::<HashSet<_>>()
-            .len(),
+        sas_type,
+        adp_type,
+        types_equal,
+        sas_nulls: left.nulls,
+        adp_nulls: right.nulls,
+        sas_distinct: left.distinct.len(),
+        adp_distinct: right.distinct.len(),
         sas_sum,
         adp_sum,
-        sas_min,
-        adp_min,
-        sas_max,
-        adp_max,
+        sas_min: left.min,
+        adp_min: right.min,
+        sas_max: left.max,
+        adp_max: right.max,
         sas_mean,
         adp_mean,
-        sas_text_min_length: text_lengths(left).0,
-        adp_text_min_length: text_lengths(right).0,
-        sas_text_max_length: text_lengths(left).1,
-        adp_text_max_length: text_lengths(right).1,
+        sas_text_min_length: left.text_min_len,
+        adp_text_min_length: right.text_min_len,
+        sas_text_max_length: left.text_max_len,
+        adp_text_max_length: right.text_max_len,
         sum_equal: match (sas_sum, adp_sum) {
             (Some(a), Some(b)) => {
-                Some((a - b).abs() <= tolerance * left.len().max(right.len()) as f64)
+                Some((a - b).abs() <= tolerance * left_rows.max(right_rows) as f64)
             }
             _ => None,
         },
         tolerance,
-        sas_out_of_range: range(left),
-        adp_out_of_range: range(right),
-        sas_unique_ok: valid_unique(left),
-        adp_unique_ok: valid_unique(right),
-        sas_nullable_ok: valid_nullable(left),
-        adp_nullable_ok: valid_nullable(right),
+        sas_out_of_range: left.out_of_range,
+        adp_out_of_range: right.out_of_range,
+        sas_unique_ok: left.unique_ok(),
+        adp_unique_ok: right.unique_ok(),
+        sas_nullable_ok: left.nullable_ok(),
+        adp_nullable_ok: right.nullable_ok(),
     }
 }
-fn key_result(
-    pair: &PairConfig,
-    columns: &[ColumnMatch],
-    left: &Table,
-    right: &Table,
-    defaults: &Defaults,
-) -> Option<KeyResult> {
+
+type KeyGroups = BTreeMap<String, Vec<(String, String)>>;
+type RowCounts = BTreeMap<String, (usize, String)>;
+
+fn resolve_key_columns(pair: &PairConfig, columns: &[ColumnMatch]) -> Option<Vec<ColumnMatch>> {
     if pair.key_columns.is_empty() {
         return None;
     }
-    let keys = pair
-        .key_columns
+    pair.key_columns
         .iter()
         .map(|name| {
             columns
@@ -516,32 +543,100 @@ fn key_result(
                 .find(|column| normalized_name(&column.sas_name) == normalized_name(name))
                 .cloned()
         })
-        .collect::<Option<Vec<_>>>()?;
-    let collect = |table: &Table, side_sas: bool| {
-        let mut values = BTreeMap::<String, Vec<(String, String)>>::new();
-        for row in &table.rows {
-            let key = keys
-                .iter()
-                .map(|column| {
-                    row.get(if side_sas {
-                        column.sas_index
-                    } else {
-                        column.adp_index
-                    })
+        .collect::<Option<Vec<_>>>()
+}
+
+/// Actualiza en un solo paso, para una fila ya leída, los acumuladores de
+/// columna, el conteo de fingerprints (para filas solo-en-un-lado) y, si hay
+/// columnas clave configuradas, el agrupamiento por clave — evitando volver a
+/// recorrer la fila o recalcular el fingerprint más de una vez.
+#[allow(clippy::too_many_arguments)]
+fn accumulate_row(
+    row: &[String],
+    columns: &[ColumnMatch],
+    side_sas: bool,
+    pair: &PairConfig,
+    defaults: &Defaults,
+    column_accs: &mut [ColumnAccumulator],
+    row_counts: &mut RowCounts,
+    key_columns: Option<&[ColumnMatch]>,
+    key_groups: &mut Option<KeyGroups>,
+) -> (String, String) {
+    for (acc, column) in column_accs.iter_mut().zip(columns) {
+        let index = if side_sas {
+            column.sas_index
+        } else {
+            column.adp_index
+        };
+        let value = row.get(index).map(String::as_str).unwrap_or("");
+        acc.push(value);
+    }
+    let fp = fingerprint(row, columns, side_sas, pair, defaults);
+    let text = row_text(row, columns, side_sas);
+    let entry = row_counts
+        .entry(fp.clone())
+        .or_insert_with(|| (0, text.clone()));
+    entry.0 += 1;
+    if let (Some(key_cols), Some(groups)) = (key_columns, key_groups.as_mut()) {
+        let key = key_cols
+            .iter()
+            .map(|c| {
+                row.get(if side_sas { c.sas_index } else { c.adp_index })
                     .cloned()
                     .unwrap_or_default()
-                })
-                .collect::<Vec<_>>()
-                .join(" | ");
-            values.entry(key).or_default().push((
-                fingerprint(row, columns, side_sas, pair, defaults),
-                row_text(row, columns, side_sas),
-            ));
-        }
-        values
-    };
-    let sas = collect(left, true);
-    let adp = collect(right, false);
+            })
+            .collect::<Vec<_>>()
+            .join(" | ");
+        groups.entry(key).or_default().push((fp.clone(), text.clone()));
+    }
+    (fp, text)
+}
+
+type SideAccumulation = (
+    Vec<ColumnAccumulator>,
+    RowCounts,
+    Option<KeyGroups>,
+    usize,
+);
+
+fn run_side(
+    mut stream: RowStream,
+    columns: &[ColumnMatch],
+    side_sas: bool,
+    pair: &PairConfig,
+    defaults: &Defaults,
+    key_columns: Option<&[ColumnMatch]>,
+) -> Result<SideAccumulation> {
+    let mut accs: Vec<ColumnAccumulator> = columns
+        .iter()
+        .map(|c| ColumnAccumulator::new(pair, defaults, &c.sas_name))
+        .collect();
+    let mut counts = RowCounts::new();
+    let mut groups = key_columns.map(|_| KeyGroups::new());
+    let mut rows = 0usize;
+    for row in &mut stream {
+        let row = row?;
+        rows += 1;
+        accumulate_row(
+            &row,
+            columns,
+            side_sas,
+            pair,
+            defaults,
+            &mut accs,
+            &mut counts,
+            key_columns,
+            &mut groups,
+        );
+    }
+    Ok((accs, counts, groups, rows))
+}
+
+fn finish_key_result(
+    key_names: &[String],
+    sas: KeyGroups,
+    adp: KeyGroups,
+) -> KeyResult {
     let mut samples = Vec::new();
     let mut only_sas = 0;
     let mut only_adp = 0;
@@ -605,81 +700,94 @@ fn key_result(
             _ => {}
         }
     }
-    Some(KeyResult {
-        columns: pair.key_columns.clone(),
+    KeyResult {
+        columns: key_names.to_vec(),
         sas_duplicate_keys: sas.values().filter(|v| v.len() > 1).count(),
         adp_duplicate_keys: adp.values().filter(|v| v.len() > 1).count(),
         keys_only_in_sas: only_sas,
         keys_only_in_adp: only_adp,
         changed_keys: changed,
         samples,
-    })
+    }
 }
+
 pub fn compare_pair(pair: &PairConfig, defaults: &Defaults) -> PairResult {
     let result = (|| -> Result<PairResult> {
-        let left = read_table(&pair.sas, pair.sas_delimiter(defaults) as u8)?;
-        let right = read_table(&pair.spark, pair.spark_delimiter(defaults) as u8)?;
-        let (columns, schema) = match_columns(&left, &right);
-        let column_results = columns
-            .iter()
-            .map(|column| {
-                let a = left
-                    .rows
-                    .iter()
-                    .map(|r| r.get(column.sas_index).cloned().unwrap_or_default())
-                    .collect::<Vec<_>>();
-                let b = right
-                    .rows
-                    .iter()
-                    .map(|r| r.get(column.adp_index).cloned().unwrap_or_default())
-                    .collect::<Vec<_>>();
-                column_result(column, &a, &b, pair, defaults)
-            })
-            .collect::<Vec<_>>();
-        let left_counts = row_counts(&left, &columns, true, pair, defaults);
-        let right_counts = row_counts(&right, &columns, false, pair, defaults);
-        let mut sas_only_samples = Vec::new();
-        let mut adp_only_samples = Vec::new();
-        let mut rows_only_in_sas = 0;
-        let mut rows_only_in_adp = 0;
-        for key in left_counts
-            .keys()
-            .chain(right_counts.keys())
-            .collect::<HashSet<_>>()
-        {
-            let a = left_counts.get(key);
-            let b = right_counts.get(key);
-            let ac = a.map(|v| v.0).unwrap_or(0);
-            let bc = b.map(|v| v.0).unwrap_or(0);
-            if ac > bc {
-                rows_only_in_sas += ac - bc;
-                if sas_only_samples.len() < SAMPLE_LIMIT {
-                    sas_only_samples.push(RowSample {
-                        row: a.unwrap().1.clone(),
-                        count: ac - bc,
-                    });
-                }
-            }
-            if bc > ac {
-                rows_only_in_adp += bc - ac;
-                if adp_only_samples.len() < SAMPLE_LIMIT {
-                    adp_only_samples.push(RowSample {
-                        row: b.unwrap().1.clone(),
-                        count: bc - ac,
-                    });
-                }
-            }
-        }
+        let (left_info, left_stream) =
+            open_row_stream(&pair.sas, pair.sas_delimiter(defaults) as u8)?;
+        let (right_info, right_stream) =
+            open_row_stream(&pair.spark, pair.spark_delimiter(defaults) as u8)?;
+        let (columns, schema) = match_columns(&left_info.columns, &right_info.columns);
+        let key_columns = resolve_key_columns(pair, &columns);
+        let row_order = pair.row_order(defaults);
+
+        let left_accs;
+        let right_accs;
+        let mut left_row_counts;
+        let mut right_row_counts;
+        let left_key_groups;
+        let right_key_groups;
+        let left_rows;
+        let right_rows;
         let mut samples = Vec::new();
-        let mut differing_rows = rows_only_in_sas + rows_only_in_adp;
-        let rows_equal = if !schema.columns_equal {
-            false
-        } else if pair.row_order(defaults) {
-            let limit = left.rows.len().max(right.rows.len());
-            for index in 0..limit {
-                let a = left.rows.get(index);
-                let b = right.rows.get(index);
-                let equal = match (a, b) {
+
+        if row_order {
+            let mut left_iter = left_stream;
+            let mut right_iter = right_stream;
+            let mut la: Vec<ColumnAccumulator> = columns
+                .iter()
+                .map(|c| ColumnAccumulator::new(pair, defaults, &c.sas_name))
+                .collect();
+            let mut ra: Vec<ColumnAccumulator> = columns
+                .iter()
+                .map(|c| ColumnAccumulator::new(pair, defaults, &c.sas_name))
+                .collect();
+            let mut lc = RowCounts::new();
+            let mut rc = RowCounts::new();
+            let mut lg = key_columns.as_ref().map(|_| KeyGroups::new());
+            let mut rg = key_columns.as_ref().map(|_| KeyGroups::new());
+            let mut lr = 0usize;
+            let mut rr = 0usize;
+            let mut index = 0usize;
+            loop {
+                let left_next = left_iter.next();
+                let right_next = right_iter.next();
+                if left_next.is_none() && right_next.is_none() {
+                    break;
+                }
+                let left_row = left_next.transpose()?;
+                let right_row = right_next.transpose()?;
+                let left_text = left_row.as_ref().map(|row| {
+                    lr += 1;
+                    accumulate_row(
+                        row,
+                        &columns,
+                        true,
+                        pair,
+                        defaults,
+                        &mut la,
+                        &mut lc,
+                        key_columns.as_deref(),
+                        &mut lg,
+                    )
+                    .1
+                });
+                let right_text = right_row.as_ref().map(|row| {
+                    rr += 1;
+                    accumulate_row(
+                        row,
+                        &columns,
+                        false,
+                        pair,
+                        defaults,
+                        &mut ra,
+                        &mut rc,
+                        key_columns.as_deref(),
+                        &mut rg,
+                    )
+                    .1
+                });
+                let equal = match (&left_row, &right_row) {
                     (Some(a), Some(b)) => columns.iter().all(|column| {
                         values_equal(
                             a.get(column.sas_index).map(String::as_str).unwrap_or(""),
@@ -691,16 +799,98 @@ pub fn compare_pair(pair: &PairConfig, defaults: &Defaults) -> PairResult {
                     }),
                     _ => false,
                 };
-                if !equal {
-                    if samples.len() < SAMPLE_LIMIT {
-                        samples.push(DifferenceSample {
-                            location: format!("fila {}", index + 1),
-                            sas: a.map(|r| row_text(r, &columns, true)).unwrap_or_default(),
-                            adp: b.map(|r| row_text(r, &columns, false)).unwrap_or_default(),
-                        });
-                    }
+                if !equal && samples.len() < SAMPLE_LIMIT {
+                    samples.push(DifferenceSample {
+                        location: format!("fila {}", index + 1),
+                        sas: left_text.unwrap_or_default(),
+                        adp: right_text.unwrap_or_default(),
+                    });
+                }
+                index += 1;
+            }
+            left_accs = la;
+            right_accs = ra;
+            left_row_counts = lc;
+            right_row_counts = rc;
+            left_key_groups = lg;
+            right_key_groups = rg;
+            left_rows = lr;
+            right_rows = rr;
+        } else {
+            let columns_ref = &columns;
+            let key_columns_ref = key_columns.as_deref();
+            let (left_result, right_result) = std::thread::scope(|scope| {
+                let left_handle = scope.spawn(|| {
+                    run_side(left_stream, columns_ref, true, pair, defaults, key_columns_ref)
+                });
+                let right_handle = scope.spawn(|| {
+                    run_side(right_stream, columns_ref, false, pair, defaults, key_columns_ref)
+                });
+                (
+                    left_handle.join().expect("left comparison thread panicked"),
+                    right_handle
+                        .join()
+                        .expect("right comparison thread panicked"),
+                )
+            });
+            let (la, lc, lg, lr) = left_result?;
+            let (ra, rc, rg, rr) = right_result?;
+            left_accs = la;
+            right_accs = ra;
+            left_row_counts = lc;
+            right_row_counts = rc;
+            left_key_groups = lg;
+            right_key_groups = rg;
+            left_rows = lr;
+            right_rows = rr;
+        }
+
+        let column_results = columns
+            .iter()
+            .zip(left_accs)
+            .zip(right_accs)
+            .map(|((column, left_acc), right_acc)| {
+                finish_column(column, left_acc, right_acc, left_rows, right_rows)
+            })
+            .collect::<Vec<_>>();
+
+        let mut sas_only_samples = Vec::new();
+        let mut adp_only_samples = Vec::new();
+        let mut rows_only_in_sas = 0;
+        let mut rows_only_in_adp = 0;
+        for key in left_row_counts
+            .keys()
+            .chain(right_row_counts.keys())
+            .cloned()
+            .collect::<HashSet<_>>()
+        {
+            let a = left_row_counts.remove(&key);
+            let b = right_row_counts.remove(&key);
+            let ac = a.as_ref().map(|v| v.0).unwrap_or(0);
+            let bc = b.as_ref().map(|v| v.0).unwrap_or(0);
+            if ac > bc {
+                rows_only_in_sas += ac - bc;
+                if sas_only_samples.len() < SAMPLE_LIMIT {
+                    sas_only_samples.push(RowSample {
+                        row: a.unwrap().1,
+                        count: ac - bc,
+                    });
                 }
             }
+            if bc > ac {
+                rows_only_in_adp += bc - ac;
+                if adp_only_samples.len() < SAMPLE_LIMIT {
+                    adp_only_samples.push(RowSample {
+                        row: b.unwrap().1,
+                        count: bc - ac,
+                    });
+                }
+            }
+        }
+        let mut differing_rows = rows_only_in_sas + rows_only_in_adp;
+        let rows_equal = if !schema.columns_equal {
+            false
+        } else if row_order {
             differing_rows = samples.len().max(differing_rows);
             samples.is_empty()
         } else {
@@ -724,8 +914,12 @@ pub fn compare_pair(pair: &PairConfig, defaults: &Defaults) -> PairResult {
             }
             rows_only_in_sas == 0 && rows_only_in_adp == 0
         };
-        let key_result = key_result(pair, &columns, &left, &right, defaults);
-        let row_count_equal = left.rows.len() == right.rows.len();
+
+        let key_result = match (left_key_groups, right_key_groups) {
+            (Some(sas), Some(adp)) => Some(finish_key_result(&pair.key_columns, sas, adp)),
+            _ => None,
+        };
+        let row_count_equal = left_rows == right_rows;
         let summaries_equal = column_results.iter().all(|r| {
             r.types_equal
                 && r.sas_nulls == r.adp_nulls
@@ -745,17 +939,17 @@ pub fn compare_pair(pair: &PairConfig, defaults: &Defaults) -> PairResult {
             && summaries_equal;
         Ok(PairResult {
             name: pair.label(),
-            sas: info(&pair.sas, &left),
-            spark: info(&pair.spark, &right),
+            sas: file_info(&pair.sas, left_info.columns.len(), left_rows),
+            spark: file_info(&pair.spark, right_info.columns.len(), right_rows),
             formats: FormatResult {
-                sas_format: left.format.clone(),
-                adp_format: right.format.clone(),
-                sas_details: left.details.clone(),
-                adp_details: right.details.clone(),
+                sas_format: left_info.format.clone(),
+                adp_format: right_info.format.clone(),
+                sas_details: left_info.details.clone(),
+                adp_details: right_info.details.clone(),
             },
             row_count_equal,
             schema,
-            row_order_compared: pair.row_order(defaults),
+            row_order_compared: row_order,
             rows_equal,
             differing_rows,
             rows_only_in_sas,
@@ -823,8 +1017,9 @@ pub fn compare_pair(pair: &PairConfig, defaults: &Defaults) -> PairResult {
     })
 }
 pub fn compare_all(pairs: &[PairConfig], defaults: &Defaults) -> RunResult {
+    use rayon::prelude::*;
     let pairs = pairs
-        .iter()
+        .par_iter()
         .map(|pair| compare_pair(pair, defaults))
         .collect::<Vec<_>>();
     RunResult {
