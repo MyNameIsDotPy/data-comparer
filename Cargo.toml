@@ -1,6 +1,6 @@
 [package]
 name = "data-comparer"
-version = "0.2.3"
+version = "0.3.0"
 edition = "2021"
 description = "Comparador local de salidas SAS y Spark"
 
@@ -16,12 +16,16 @@ path = "src/bin/data-comparer-mcp.rs"
 anyhow = "1"
 arrow-array = "53"
 arrow-cast = "53"
+arrow-schema = "53"
 axum = { version = "0.7", features = ["multipart"] }
 calamine = "0.26"
+chardetng = "1.0.0"
 chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4", features = ["derive"] }
 csv = "1"
+encoding_rs = "0.8.41"
 parquet = { version = "53", features = ["arrow"] }
+rust_xlsxwriter = "0.99.0"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_yaml = "0.9"

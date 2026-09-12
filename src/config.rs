@@ -82,6 +82,10 @@ pub struct PairConfig {
     pub key_columns: Vec<String>,
     #[serde(default)]
     pub delimiter: Option<char>,
+    #[serde(default)]
+    pub sas_delimiter: Option<char>,
+    #[serde(default)]
+    pub spark_delimiter: Option<char>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -131,5 +135,12 @@ impl PairConfig {
     }
     pub fn delimiter(&self, defaults: &Defaults) -> char {
         self.delimiter.unwrap_or(defaults.delimiter)
+    }
+    pub fn sas_delimiter(&self, defaults: &Defaults) -> char {
+        self.sas_delimiter.unwrap_or_else(|| self.delimiter(defaults))
+    }
+    pub fn spark_delimiter(&self, defaults: &Defaults) -> char {
+        self.spark_delimiter
+            .unwrap_or_else(|| self.delimiter(defaults))
     }
 }

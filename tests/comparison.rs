@@ -14,6 +14,8 @@ fn pair(left: &std::path::Path, right: &std::path::Path) -> PairConfig {
         columns: Default::default(),
         key_columns: vec![],
         delimiter: None,
+        sas_delimiter: None,
+        spark_delimiter: None,
     }
 }
 

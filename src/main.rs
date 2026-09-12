@@ -27,6 +27,10 @@ enum Command {
         key_columns: Vec<String>,
         #[arg(long, default_value_t = ',')]
         delimiter: char,
+        #[arg(long)]
+        sas_delimiter: Option<char>,
+        #[arg(long)]
+        spark_delimiter: Option<char>,
     },
     Batch {
         manifest: PathBuf,
@@ -37,6 +41,16 @@ enum Command {
     Serve {
         #[arg(long, default_value = "127.0.0.1:8080")]
         address: String,
+    },
+    Convert {
+        input: PathBuf,
+        output: PathBuf,
+        #[arg(long)]
+        delimiter: Option<char>,
+        #[arg(long)]
+        output_delimiter: Option<char>,
+        #[arg(long)]
+        encoding: Option<String>,
     },
 }
 
@@ -58,6 +72,8 @@ async fn main() -> Result<()> {
             tolerance,
             key_columns,
             delimiter,
+            sas_delimiter,
+            spark_delimiter,
         } => {
             let defaults = Defaults {
                 compare_row_order: row_order,
@@ -77,6 +93,8 @@ async fn main() -> Result<()> {
                     columns: Default::default(),
                     key_columns,
                     delimiter: None,
+                    sas_delimiter,
+                    spark_delimiter,
                 }],
             };
             let run = compare_all(&manifest.pairs, &defaults);
@@ -113,6 +131,45 @@ async fn main() -> Result<()> {
             println!("Manifiesto válido");
         }
         Command::Serve { address } => data_comparer::web::serve(&address).await?,
+        Command::Convert {
+            input,
+            output,
+            delimiter,
+            output_delimiter,
+            encoding,
+        } => {
+            let input_delimiter = delimiter.map(|c| c as u8);
+            let output_delimiter = output_delimiter
+                .map(|c| c as u8)
+                .or(input_delimiter)
+                .unwrap_or(b',');
+            let report = data_comparer::convert::convert_file(
+                &input,
+                &output,
+                input_delimiter,
+                output_delimiter,
+                encoding.as_deref(),
+            )?;
+            println!(
+                "Convertido {} -> {}",
+                report.input_format, report.output_format
+            );
+            println!("Codificación detectada: {}", report.detected_encoding);
+            if report.bom_removed {
+                println!("Se detectó y eliminó un BOM UTF-8 al inicio del archivo.");
+            }
+            if let Some(delim) = report.used_delimiter {
+                println!("Delimitador de entrada usado: {delim}");
+            }
+            println!("Filas: {} | Columnas: {}", report.rows, report.columns);
+            if !report.columns_with_replacement_char.is_empty() {
+                println!(
+                    "Aviso: estas columnas contienen el carácter de reemplazo \u{FFFD}, lo que indica una corrupción de encoding previa e irreversible en el archivo de origen: {}",
+                    report.columns_with_replacement_char.join(", ")
+                );
+            }
+            println!("Archivo escrito en {}", output.display());
+        }
     }
     Ok(())
 }

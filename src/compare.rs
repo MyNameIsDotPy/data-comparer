@@ -617,9 +617,8 @@ fn key_result(
 }
 pub fn compare_pair(pair: &PairConfig, defaults: &Defaults) -> PairResult {
     let result = (|| -> Result<PairResult> {
-        let delimiter = pair.delimiter(defaults) as u8;
-        let left = read_table(&pair.sas, delimiter)?;
-        let right = read_table(&pair.spark, delimiter)?;
+        let left = read_table(&pair.sas, pair.sas_delimiter(defaults) as u8)?;
+        let right = read_table(&pair.spark, pair.spark_delimiter(defaults) as u8)?;
         let (columns, schema) = match_columns(&left, &right);
         let column_results = columns
             .iter()
