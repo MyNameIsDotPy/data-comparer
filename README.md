@@ -45,11 +45,18 @@ data-comparer validate comparaciones.yaml
 Opciones de `compare`:
 
 ```text
---row-order              Exige el mismo orden de filas.
---tolerance <NUMERO>     Tolerancia numérica absoluta; el valor predeterminado es 0.1.
---key <COLUMNAS>         Columnas de clave, separadas por coma, para comparar entidades.
---delimiter <CARACTER>   Delimitador de los archivos CSV; el valor predeterminado es ",".
+--row-order                 Exige el mismo orden de filas.
+--tolerance <NUMERO>        Tolerancia numérica absoluta; el valor predeterminado es 0.1.
+--key <COLUMNAS>            Columnas de clave, separadas por coma, para comparar entidades.
+--delimiter <CARACTER>      Delimitador de los archivos CSV; el valor predeterminado es ",".
+--sas-delimiter <CARACTER>  Delimitador solo para el archivo SAS (si difiere del general).
+--spark-delimiter <CARACTER> Delimitador solo para el archivo Spark/ADP.
+--encoding <NOMBRE>          Encoding de ambos archivos CSV; por defecto se autodetecta.
+--sas-encoding <NOMBRE>      Encoding solo para el archivo SAS (p. ej. "windows-1252", "iso-8859-1").
+--spark-encoding <NOMBRE>    Encoding solo para el archivo Spark/ADP.
 ```
+
+Los archivos CSV con encodings distintos entre sí (por ejemplo SAS en Windows-1252 y Spark en UTF-8) se comparan sin problema: cada lado se decodifica de forma independiente, ya sea autodetectando el encoding o usando el indicado explícitamente. Un BOM UTF-8 al inicio del archivo se detecta y descarta automáticamente.
 
 Use `data-comparer <comando> --help` para consultar todas las opciones.
 
@@ -67,6 +74,8 @@ pairs:
   - name: ventas
     sas: ./sas/ventas.xlsx
     spark: ./spark/ventas.parquet
+    sas_encoding: windows-1252
+    spark_encoding: utf-8
     columns:
       fecha:
         date_format: "%Y-%m-%d"
@@ -87,7 +96,9 @@ Los nombres de columnas se emparejan sin distinguir mayúsculas/minúsculas y es
 
 `key_columns` habilita la comparación por clave de negocio: informa claves duplicadas, claves exclusivas de SAS o ADP y claves que existen en ambos archivos pero contienen valores diferentes.
 
-`delimiter` (global o por par, un solo carácter) define el separador usado al leer archivos CSV; no afecta a Excel ni Parquet.
+`delimiter` (global o por par, un solo carácter) define el separador usado al leer archivos CSV; no afecta a Excel ni Parquet. `sas_delimiter` y `spark_delimiter` sobrescriben `delimiter` solo para ese archivo.
+
+`encoding` (global o por par) define el encoding usado al leer archivos CSV; si se omite, se autodetecta. `sas_encoding` y `spark_encoding` sobrescriben `encoding` solo para ese archivo, útil cuando SAS y Spark exportan en encodings distintos.
 
 ## MCP
 

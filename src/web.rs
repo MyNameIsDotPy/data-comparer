@@ -105,6 +105,9 @@ async fn compare(mut multipart: Multipart) -> Result<Json<Value>, (StatusCode, S
                 delimiter: None,
                 sas_delimiter: None,
                 spark_delimiter: None,
+                encoding: None,
+                sas_encoding: None,
+                spark_encoding: None,
             }),
             _ => Err((
                 StatusCode::BAD_REQUEST,

@@ -1,14 +1,12 @@
+use crate::encoding::{resolve_encoding, strip_bom};
 use crate::reader::{read_table, Table};
 use anyhow::{anyhow, Context, Result};
 use arrow_array::{ArrayRef, RecordBatch, StringArray};
 use arrow_schema::{DataType, Field, Schema};
-use encoding_rs::Encoding;
 use std::fs::File;
 use std::io::{Cursor, Read};
 use std::path::Path;
 use std::sync::Arc;
-
-const BOM: [u8; 3] = [0xEF, 0xBB, 0xBF];
 
 #[derive(Debug)]
 pub struct ConvertReport {
@@ -94,25 +92,10 @@ fn read_csv_any_encoding(
         .with_context(|| format!("No se pudo abrir CSV {}", path.display()))?
         .read_to_end(&mut raw)?;
 
-    let bom_removed = raw.starts_with(&BOM);
-    let bytes = if bom_removed { &raw[BOM.len()..] } else { &raw[..] };
-
-    let (decoded, encoding_name) = match encoding_override {
-        Some(label) => {
-            let encoding = Encoding::for_label(label.as_bytes())
-                .ok_or_else(|| anyhow!("Encoding desconocido: {label}"))?;
-            let (text, _, _) = encoding.decode(bytes);
-            (text.into_owned(), encoding.name().to_string())
-        }
-        None => {
-            let mut detector =
-                chardetng::EncodingDetector::new(chardetng::Iso2022JpDetection::Deny);
-            detector.feed(bytes, true);
-            let encoding = detector.guess(None, chardetng::Utf8Detection::Allow);
-            let (text, _, _) = encoding.decode(bytes);
-            (text.into_owned(), encoding.name().to_string())
-        }
-    };
+    let (bytes, bom_removed) = strip_bom(&raw);
+    let encoding = resolve_encoding(bytes, encoding_override)?;
+    let (decoded, _, _) = encoding.decode(bytes);
+    let (decoded, encoding_name) = (decoded.into_owned(), encoding.name().to_string());
 
     let delimiter = delimiter.unwrap_or_else(|| guess_delimiter(&decoded));
 

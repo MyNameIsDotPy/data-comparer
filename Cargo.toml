@@ -1,6 +1,6 @@
 [package]
 name = "data-comparer"
-version = "0.3.1-beta.1"
+version = "0.3.2"
 edition = "2021"
 description = "Comparador local de salidas SAS y Spark"
 
@@ -25,6 +25,7 @@ chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4", features = ["derive"] }
 csv = "1"
 encoding_rs = "0.8.41"
+encoding_rs_io = "0.1.8"
 parquet = { version = "53", features = ["arrow"] }
 rayon = "1.12.0"
 rust_xlsxwriter = "0.99.0"

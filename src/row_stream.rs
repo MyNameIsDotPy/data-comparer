@@ -1,10 +1,15 @@
+use crate::encoding::{resolve_encoding, strip_bom};
 use anyhow::{anyhow, Context, Result};
 use arrow_array::RecordBatch;
 use arrow_cast::display::array_value_to_string;
 use calamine::{open_workbook_auto, Data, Range, Reader};
+use encoding_rs_io::DecodeReaderBytesBuilder;
 use parquet::arrow::arrow_reader::{ParquetRecordBatchReader, ParquetRecordBatchReaderBuilder};
 use std::fs::File;
+use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
+
+const ENCODING_SAMPLE_SIZE: usize = 64 * 1024;
 
 pub struct StreamInfo {
     pub columns: Vec<String>,
@@ -26,7 +31,7 @@ pub struct ExcelRowIter {
 }
 
 pub enum RowStream {
-    Csv(csv::StringRecordsIntoIter<File>),
+    Csv(csv::StringRecordsIntoIter<Box<dyn Read + Send>>),
     Parquet(ParquetRowIter),
     Excel(ExcelRowIter),
 }
@@ -105,14 +110,18 @@ impl Iterator for ExcelRowIter {
     }
 }
 
-pub fn open_row_stream(path: &Path, delimiter: u8) -> Result<(StreamInfo, RowStream)> {
+pub fn open_row_stream(
+    path: &Path,
+    delimiter: u8,
+    encoding: Option<&str>,
+) -> Result<(StreamInfo, RowStream)> {
     let extension = path
         .extension()
         .and_then(|s| s.to_str())
         .unwrap_or("")
         .to_ascii_lowercase();
     match extension.as_str() {
-        "csv" => open_csv(path, delimiter),
+        "csv" => open_csv(path, delimiter, encoding),
         "xlsx" | "xlsm" | "xls" => open_excel(path),
         "parquet" => open_parquet(path),
         _ => Err(anyhow!(
@@ -122,20 +131,40 @@ pub fn open_row_stream(path: &Path, delimiter: u8) -> Result<(StreamInfo, RowStr
     }
 }
 
-fn open_csv(path: &Path, delimiter: u8) -> Result<(StreamInfo, RowStream)> {
+fn open_csv(path: &Path, delimiter: u8, encoding: Option<&str>) -> Result<(StreamInfo, RowStream)> {
+    let mut sample = vec![0u8; ENCODING_SAMPLE_SIZE];
+    let read = File::open(path)
+        .with_context(|| format!("No se pudo abrir CSV {}", path.display()))?
+        .read(&mut sample)?;
+    sample.truncate(read);
+    let (sample_without_bom, bom_removed) = strip_bom(&sample);
+    let detected_encoding = resolve_encoding(sample_without_bom, encoding)?;
+
+    let mut file = File::open(path)
+        .with_context(|| format!("No se pudo abrir CSV {}", path.display()))?;
+    if bom_removed {
+        file.seek(SeekFrom::Start(3))?;
+    }
+    let decoded: Box<dyn Read + Send> = Box::new(
+        DecodeReaderBytesBuilder::new()
+            .encoding(Some(detected_encoding))
+            .build(file),
+    );
+
     let mut reader = csv::ReaderBuilder::new()
         .flexible(true)
         .delimiter(delimiter)
-        .from_path(path)
-        .with_context(|| format!("No se pudo abrir CSV {}", path.display()))?;
+        .from_reader(decoded);
     let columns = reader.headers()?.iter().map(str::to_owned).collect();
+    let mut details = vec![format!("Delimitador: {}", delimiter as char)];
+    details.push(format!("Codificación: {}", detected_encoding.name()));
+    if bom_removed {
+        details.push("Se detectó y eliminó un BOM UTF-8 al inicio del archivo.".to_string());
+    }
     let info = StreamInfo {
         columns,
         format: "CSV".to_string(),
-        details: vec![
-            format!("Delimitador: {}", delimiter as char),
-            "Codificación: UTF-8".to_string(),
-        ],
+        details,
     };
     Ok((info, RowStream::Csv(reader.into_records())))
 }

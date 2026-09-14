@@ -16,6 +16,9 @@ fn pair(left: &std::path::Path, right: &std::path::Path) -> PairConfig {
         delimiter: None,
         sas_delimiter: None,
         spark_delimiter: None,
+        encoding: None,
+        sas_encoding: None,
+        spark_encoding: None,
     }
 }
 
@@ -79,6 +82,20 @@ fn reports_rows_and_keys_only_on_each_side() {
     let keys = pair.key_result.as_ref().unwrap();
     assert_eq!(keys.keys_only_in_sas, 1);
     assert_eq!(keys.keys_only_in_adp, 1);
+}
+
+#[test]
+fn compares_files_with_different_source_encodings() {
+    let temp = tempfile::tempdir().unwrap();
+    let left = temp.path().join("sas.csv");
+    let right = temp.path().join("adp.csv");
+    fs::write(&left, "poliza,ciudad\nA-1,Bogotá\n").unwrap();
+    let (encoded, _, _) = encoding_rs::WINDOWS_1252.encode("poliza,ciudad\nA-1,Bogotá\n");
+    fs::write(&right, &encoded).unwrap();
+    let mut config = pair(&left, &right);
+    config.spark_encoding = Some("windows-1252".to_string());
+    let result = compare_all(&[config], &Defaults::default());
+    assert!(result.passed, "{result:#?}");
 }
 
 #[test]

@@ -598,7 +598,7 @@ dependencies = [
 
 [[package]]
 name = "data-comparer"
-version = "0.3.1-beta.1"
+version = "0.3.2"
 dependencies = [
  "anyhow",
  "arrow-array",
@@ -612,6 +612,7 @@ dependencies = [
  "clap",
  "csv",
  "encoding_rs",
+ "encoding_rs_io",
  "parquet",
  "rayon",
  "rust_xlsxwriter",
@@ -665,6 +666,15 @@ dependencies = [
  "rustversion",
  "scopeguard",
  "simdutf8",
+]
+
+[[package]]
+name = "encoding_rs_io"
+version = "0.1.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fba3fe847045ecff794b9c138293a80db914678c453ad63fbf0c6a9eb6e00b22"
+dependencies = [
+ "encoding_rs",
 ]
 
 [[package]]

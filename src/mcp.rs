@@ -41,7 +41,7 @@ pub async fn serve() -> Result<()> {
 }
 
 fn tool(name: &str, description: &str) -> Value {
-    json!({"name":name,"description":description,"inputSchema":{"type":"object","properties":{"sas":{"type":"string"},"spark":{"type":"string"},"manifest":{"type":"string"},"row_order":{"type":"boolean"},"tolerance":{"type":"number"},"key_columns":{"type":"array","items":{"type":"string"}},"trim_values":{"type":"boolean"},"case_insensitive_values":{"type":"boolean"},"sas_delimiter":{"type":"string"},"spark_delimiter":{"type":"string"}},"additionalProperties":false}})
+    json!({"name":name,"description":description,"inputSchema":{"type":"object","properties":{"sas":{"type":"string"},"spark":{"type":"string"},"manifest":{"type":"string"},"row_order":{"type":"boolean"},"tolerance":{"type":"number"},"key_columns":{"type":"array","items":{"type":"string"}},"trim_values":{"type":"boolean"},"case_insensitive_values":{"type":"boolean"},"sas_delimiter":{"type":"string"},"spark_delimiter":{"type":"string"},"sas_encoding":{"type":"string"},"spark_encoding":{"type":"string"}},"additionalProperties":false}})
 }
 fn call(params: &Value) -> Value {
     let result = (|| -> Result<Value> {
@@ -103,6 +103,15 @@ fn call(params: &Value) -> Value {
                         .get("spark_delimiter")
                         .and_then(Value::as_str)
                         .and_then(|s| s.chars().next()),
+                    encoding: None,
+                    sas_encoding: args
+                        .get("sas_encoding")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned),
+                    spark_encoding: args
+                        .get("spark_encoding")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned),
                 }],
             },
             "compare_batch" => serde_yaml::from_str(&std::fs::read_to_string(

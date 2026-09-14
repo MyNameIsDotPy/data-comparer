@@ -31,6 +31,12 @@ enum Command {
         sas_delimiter: Option<char>,
         #[arg(long)]
         spark_delimiter: Option<char>,
+        #[arg(long)]
+        encoding: Option<String>,
+        #[arg(long)]
+        sas_encoding: Option<String>,
+        #[arg(long)]
+        spark_encoding: Option<String>,
     },
     Batch {
         manifest: PathBuf,
@@ -74,11 +80,15 @@ async fn main() -> Result<()> {
             delimiter,
             sas_delimiter,
             spark_delimiter,
+            encoding,
+            sas_encoding,
+            spark_encoding,
         } => {
             let defaults = Defaults {
                 compare_row_order: row_order,
                 numeric_tolerance: tolerance,
                 delimiter,
+                encoding,
                 ..Defaults::default()
             };
             let manifest = Manifest {
@@ -95,6 +105,9 @@ async fn main() -> Result<()> {
                     delimiter: None,
                     sas_delimiter,
                     spark_delimiter,
+                    encoding: None,
+                    sas_encoding,
+                    spark_encoding,
                 }],
             };
             let run = compare_all(&manifest.pairs, &defaults);

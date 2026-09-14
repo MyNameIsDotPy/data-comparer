@@ -713,10 +713,16 @@ fn finish_key_result(
 
 pub fn compare_pair(pair: &PairConfig, defaults: &Defaults) -> PairResult {
     let result = (|| -> Result<PairResult> {
-        let (left_info, left_stream) =
-            open_row_stream(&pair.sas, pair.sas_delimiter(defaults) as u8)?;
-        let (right_info, right_stream) =
-            open_row_stream(&pair.spark, pair.spark_delimiter(defaults) as u8)?;
+        let (left_info, left_stream) = open_row_stream(
+            &pair.sas,
+            pair.sas_delimiter(defaults) as u8,
+            pair.sas_encoding(defaults),
+        )?;
+        let (right_info, right_stream) = open_row_stream(
+            &pair.spark,
+            pair.spark_delimiter(defaults) as u8,
+            pair.spark_encoding(defaults),
+        )?;
         let (columns, schema) = match_columns(&left_info.columns, &right_info.columns);
         let key_columns = resolve_key_columns(pair, &columns);
         let row_order = pair.row_order(defaults);

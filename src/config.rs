@@ -34,6 +34,8 @@ pub struct Defaults {
     pub case_insensitive_values: bool,
     #[serde(default = "default_delimiter")]
     pub delimiter: char,
+    #[serde(default)]
+    pub encoding: Option<String>,
 }
 
 impl Default for Defaults {
@@ -46,6 +48,7 @@ impl Default for Defaults {
             trim_values: default_trim_values(),
             case_insensitive_values: false,
             delimiter: default_delimiter(),
+            encoding: None,
         }
     }
 }
@@ -86,6 +89,12 @@ pub struct PairConfig {
     pub sas_delimiter: Option<char>,
     #[serde(default)]
     pub spark_delimiter: Option<char>,
+    #[serde(default)]
+    pub encoding: Option<String>,
+    #[serde(default)]
+    pub sas_encoding: Option<String>,
+    #[serde(default)]
+    pub spark_encoding: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -142,5 +151,18 @@ impl PairConfig {
     pub fn spark_delimiter(&self, defaults: &Defaults) -> char {
         self.spark_delimiter
             .unwrap_or_else(|| self.delimiter(defaults))
+    }
+    pub fn encoding<'a>(&'a self, defaults: &'a Defaults) -> Option<&'a str> {
+        self.encoding.as_deref().or(defaults.encoding.as_deref())
+    }
+    pub fn sas_encoding<'a>(&'a self, defaults: &'a Defaults) -> Option<&'a str> {
+        self.sas_encoding
+            .as_deref()
+            .or_else(|| self.encoding(defaults))
+    }
+    pub fn spark_encoding<'a>(&'a self, defaults: &'a Defaults) -> Option<&'a str> {
+        self.spark_encoding
+            .as_deref()
+            .or_else(|| self.encoding(defaults))
     }
 }
